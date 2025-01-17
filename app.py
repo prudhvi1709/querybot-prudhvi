@@ -11,6 +11,7 @@ import duckdb
 from dotenv import load_dotenv
 import io
 import csv
+from typing import List
 
 app = FastAPI()
 
@@ -23,12 +24,19 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Constant System Prompt
 SYSTEM_PROMPT = (
     "You are a helpful assistant. Your task is to analyze data from uploaded CSV files. "
-    "You will receive a schema and a user query in natural language queries. "
-    "Convert these queries into DuckDB SQL commands that can be executed on the data, "
-    "and generate insights or results based on the specific features of the provided schema. Do not provide code templates."
+    "You will receive the schema for each file and a user query in natural language. "
+    "If multiple files are uploaded, observe the schemas of all the files. "
+    "Join them only when necessary based on the user query, ensuring that all column names are used exactly as provided in the schema. "
+    "Your goal is to convert the query into DuckDB SQL commands, paying close attention to the exact column names from the schema. "
+    "Only perform joins if required by the query. After executing the SQL commands, generate insights or results based on the query and schema. "
+    "Do not provide code templates or unnecessary explanations.\n\n"
+    "For the output, follow this structure:\n"
+    "1. Guess the objective of the user based on their query.\n"
+    "2. Describe the steps to achieve this objective in SQL.\n"
+    "3. Build the logic for the SQL query by identifying the necessary tables and relationships. Select the appropriate columns based on the user's question and the dataset.\n"
+    "4. Write SQL to answer the question. Use SQLite syntax."
 )
 
 # In-memory storage for uploaded datasets
@@ -62,60 +70,68 @@ class QueryRequest(BaseModel):
     query: str
 
 @app.post("/upload_csv/")
-async def upload_csv(file: UploadFile = File(...)):
-    # Save the uploaded file
-    temp_file_path = f"./temp_{file.filename}"
-    with open(temp_file_path, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
+async def upload_csv(files: List[UploadFile] = File(...)):
+    uploaded_datasets = []
 
-    # Load CSV into a Pandas DataFrame
-    df = pd.read_csv(temp_file_path)
-    dataset_name = file.filename.split(".")[0]
-    datasets[dataset_name] = df
+    for file in files:
+        # Save each uploaded file temporarily
+        temp_file_path = f"./temp_{file.filename}"
+        with open(temp_file_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+        # Load CSV into a Pandas DataFrame
+        df = pd.read_csv(temp_file_path)
+        dataset_name = file.filename.split(".")[0]
+        datasets[dataset_name] = df
 
-    # Define dtype_mapping for DuckDB
-    dtype_mapping = {
-        "object": "TEXT",
-        "int64": "INTEGER",
-        "float64": "FLOAT",
-        "bool": "BOOLEAN",
-        "datetime64[ns]": "DATETIME",
-    }
+        # Define dtype_mapping for DuckDB
+        dtype_mapping = {
+            "object": "TEXT",
+            "int64": "INTEGER",
+            "float64": "FLOAT",
+            "bool": "BOOLEAN",
+            "datetime64[ns]": "DATETIME",
+        }
 
-    # Drop the table if it already exists
-    try:
-        con.execute(f"DROP TABLE IF EXISTS {dataset_name};")
-    except Exception as e:
-        print(f"Error dropping table: {e}")
+        # Drop the table if it already exists
+        try:
+            con.execute(f"DROP TABLE IF EXISTS {dataset_name};")
+        except Exception as e:
+            print(f"Error dropping table: {e}")
 
-    # Create table in DuckDB
-    con.register("data_table", df)
-    con.execute(f"CREATE TABLE {dataset_name} AS SELECT * FROM data_table")
+        # Create table in DuckDB
+        con.register("data_table", df)
+        con.execute(f"CREATE TABLE {dataset_name} AS SELECT * FROM data_table")
+        print(f"Table '{dataset_name}' created in DuckDB.")
+        
+        # Extract schema and generate SQL for table creation
+        schema = {"tables": []}
+        table_name = dataset_name
+        columns = [f"[{col}] {dtype_mapping.get(str(df[col].dtype), 'TEXT')}" for col in df.columns]
+        schema["tables"].append(f"CREATE TABLE {table_name} ({', '.join(columns)})")
+        schema_description = "\n".join(schema["tables"])
+        datasets[dataset_name]["schema_description"] = schema_description
+        
+        # Generate suggested questions using LLM
+        user_prompt = f"Dataset name: {dataset_name}\nDataset schema:\n{schema_description}\nPlease provide suggested questions."
+        suggested_questions = call_llm_system_prompt(user_prompt)
+        
+        # Clean up temporary file
+        os.remove(temp_file_path)
+        
+        # Append to the uploaded datasets list (only one entry per dataset)
+        uploaded_datasets.append({
+            "dataset_name": dataset_name,
+            "schema": schema_description,  # Only one schema description
+            "suggested_questions": suggested_questions,
+        })
+        print(f"tables in memory (upload): {list(datasets.keys())}")
+        print("Uploaded datasets:", uploaded_datasets)
+    
+    return {"uploaded_datasets": uploaded_datasets}
 
-    # Extract schema
-    schema = {
-        "tables": []
-    }
-    table_name = dataset_name
-    columns = [f"[{col}] {dtype_mapping.get(str(df[col].dtype), 'TEXT')}" for col in df.columns]
-    schema["tables"].append(f"CREATE TABLE {table_name} ({', '.join(columns)})")
-    schema_description = "\n".join(schema["tables"])
-
-    # Generate suggested questions using LLM
-    user_prompt = f"Dataset name: {dataset_name}\nDataset schema:\n{schema_description}\nPlease provide suggested questions."
-    suggested_questions = call_llm_system_prompt(user_prompt)
-
-    # Clean up temporary file
-    os.remove(temp_file_path)
-
-    # Return the dataset name, schema, and suggested questions immediately
-    return {
-        "dataset_name": dataset_name,
-        "schema": schema,
-        "suggested_questions": suggested_questions,
-    }
 @app.post("/query/")
 async def query_data(request: QueryRequest):
+    print(f"tables in memory (query): {list(datasets.keys())}")
     dataset_name = request.dataset_name
 
     # Check if the dataset exists
@@ -127,14 +143,22 @@ async def query_data(request: QueryRequest):
         table_exists = con.execute(f"SELECT 1 FROM {dataset_name} LIMIT 1;").fetchall()
     except Exception:
         return JSONResponse(content={"error": f"Table '{dataset_name}' does not exist in DuckDB."}, status_code=404)
+    print(f"Table '{dataset_name}' exists in DuckDB.")
 
-    # Generate SQL query dynamically using LLM
+    # Constructing a single schema for all datasets
+    dataset_schemas = ""
+    for name, dataset in datasets.items():
+        # Ensure schema_description is added once per dataset
+        if 'schema_description' in dataset:
+            dataset_schemas += f"Dataset name: {name}\nSchema: {dataset['schema_description']}\n\n"
+    # User query
     user_query = request.query
-    llm_prompt = f"Dataset name: {dataset_name}\nPlease write an SQL query for the following question:\n{user_query}"
+    # Construct LLM prompt with all dataset schemas and user query (only once for each dataset)
+    llm_prompt = f"Here are the datasets available:\n{dataset_schemas}Please write an SQL query for the following question:\n{user_query}"
+    # Call LLM with the updated prompt
     llm_response = call_llm_system_prompt(llm_prompt)
-
     # Log the LLM response for debugging
-    print(f"LLM Response: {llm_response}")
+    print(llm_response)
 
     # Extract the SQL query from the response (strip out markdown and explanation text)
     import re
