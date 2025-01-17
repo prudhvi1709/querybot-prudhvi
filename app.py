@@ -1,7 +1,20 @@
+# /// script
+# requires-python = ">=3.13"
+# dependencies = [
+#     "duckdb",
+#     "fastapi",
+#     "pandas",
+#     "pydantic",
+#     "python-dotenv",
+#     "python-multipart",
+#     "requests",
+#     "uvicorn",
+# ]
+# ///
 import os
 import pandas as pd
 from fastapi import FastAPI, File, UploadFile, Path
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import JSONResponse
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -11,7 +24,6 @@ import duckdb
 from dotenv import load_dotenv
 import io
 import csv
-from typing import List
 
 app = FastAPI()
 
@@ -208,3 +220,8 @@ def read_root():
     return {"message": "Welcome to Local DataChat!"}
 
 load_dotenv()
+
+if __name__ == "__main__":
+    import uvicorn
+
+    uvicorn.run(app, host="0.0.0.0", port=8000)
