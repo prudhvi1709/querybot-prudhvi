@@ -24,6 +24,7 @@ import duckdb
 from dotenv import load_dotenv
 import io
 import csv
+from typing import List
 
 app = FastAPI()
 
