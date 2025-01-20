@@ -91,10 +91,10 @@ async def upload_csv(files: List[UploadFile] = File(...)):
         temp_file_path = f"./temp_{file.filename}"
         with open(temp_file_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
+
         # Load CSV into a Pandas DataFrame
         df = pd.read_csv(temp_file_path)
         dataset_name = file.filename.split(".")[0]
-        datasets[dataset_name] = df
 
         # Define dtype_mapping for DuckDB
         dtype_mapping = {
@@ -115,36 +115,38 @@ async def upload_csv(files: List[UploadFile] = File(...)):
         con.register("data_table", df)
         con.execute(f"CREATE TABLE {dataset_name} AS SELECT * FROM data_table")
         print(f"Table '{dataset_name}' created in DuckDB.")
-        
-        # Extract schema and generate SQL for table creation
-        schema = {"tables": []}
-        table_name = dataset_name
-        columns = [f"[{col}] {dtype_mapping.get(str(df[col].dtype), 'TEXT')}" for col in df.columns]
-        schema["tables"].append(f"CREATE TABLE {table_name} ({', '.join(columns)})")
-        schema_description = "\n".join(schema["tables"])
-        datasets[dataset_name]["schema_description"] = schema_description
+        # Generate schema description in proper SQL syntax
+        schema_description = f"CREATE TABLE {dataset_name} (\n" + ",\n".join(
+            [f"[{col}] {dtype_mapping.get(str(df[col].dtype), 'TEXT')}" for col in df.columns]
+        ) + "\n);"
+
+        # Update datasets dictionary
+        datasets[dataset_name] = {
+            "data": df,
+            "schema_description": schema_description
+        }
         
         # Generate suggested questions using LLM
         user_prompt = f"Dataset name: {dataset_name}\nDataset schema:\n{schema_description}\nPlease provide suggested questions."
         suggested_questions = call_llm_system_prompt(user_prompt)
-        
+
         # Clean up temporary file
         os.remove(temp_file_path)
-        
-        # Append to the uploaded datasets list (only one entry per dataset)
+
+        # Append to the uploaded datasets list
         uploaded_datasets.append({
             "dataset_name": dataset_name,
-            "schema": schema_description,  # Only one schema description
+            "schema": schema_description,
             "suggested_questions": suggested_questions,
         })
-        print(f"tables in memory (upload): {list(datasets.keys())}")
+        print(f"Tables in memory (upload): {list(datasets.keys())}")
         print("Uploaded datasets:", uploaded_datasets)
-    
+
     return {"uploaded_datasets": uploaded_datasets}
 
 @app.post("/query/")
 async def query_data(request: QueryRequest):
-    print(f"tables in memory (query): {list(datasets.keys())}")
+    print(f"Tables in memory (query): {list(datasets.keys())}")
     dataset_name = request.dataset_name
 
     # Check if the dataset exists
@@ -153,7 +155,7 @@ async def query_data(request: QueryRequest):
 
     # Validate that the table exists in DuckDB
     try:
-        table_exists = con.execute(f"SELECT 1 FROM {dataset_name} LIMIT 1;").fetchall()
+        con.execute(f"SELECT 1 FROM {dataset_name} LIMIT 1;")
     except Exception:
         return JSONResponse(content={"error": f"Table '{dataset_name}' does not exist in DuckDB."}, status_code=404)
     print(f"Table '{dataset_name}' exists in DuckDB.")
@@ -161,19 +163,23 @@ async def query_data(request: QueryRequest):
     # Constructing a single schema for all datasets
     dataset_schemas = ""
     for name, dataset in datasets.items():
-        # Ensure schema_description is added once per dataset
-        if 'schema_description' in dataset:
+        # Ensure schema_description is added only once per dataset
+        if isinstance(dataset.get("schema_description"), str):
             dataset_schemas += f"Dataset name: {name}\nSchema: {dataset['schema_description']}\n\n"
+
     # User query
     user_query = request.query
-    # Construct LLM prompt with all dataset schemas and user query (only once for each dataset)
+
+    # Construct LLM prompt with all dataset schemas and user query
     llm_prompt = f"Here are the datasets available:\n{dataset_schemas}Please write an SQL query for the following question:\n{user_query}"
-    # Call LLM with the updated prompt
+    
+    # Call LLM with the prompt
     llm_response = call_llm_system_prompt(llm_prompt)
+    
     # Log the LLM response for debugging
     print(llm_response)
 
-    # Extract the SQL query from the response (strip out markdown and explanation text)
+    # Extract the SQL query from the response
     import re
     sql_query = re.search(r'```sql\n(.*?)\n```', llm_response, re.DOTALL)
     if sql_query:
@@ -225,4 +231,4 @@ load_dotenv()
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="127.0.0.1", port=8020)

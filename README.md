@@ -37,11 +37,11 @@ This project is built using FastAPI for the backend and HTML with Bootstrap for 
 
 1. Start the FastAPI server:
    ```bash
-   uvicorn app:app --reload --port 8020
+   uv run app.py
    ```
 2. In a new terminal window, run the following command to start the frontend:
    ```bash
-   python -m http.server 8030
+   uv run python -m http.server 8030
    ```
    Then, open your web browser and navigate to (http://localhost:8030) to access the Local Datachat application.
 3. Use the interface to upload CSV files, execute queries, and download results.

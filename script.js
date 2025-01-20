@@ -1,4 +1,6 @@
 import { html, render } from "https://cdn.jsdelivr.net/npm/lit-html/lit-html.js";
+// import { Marked } from "https://cdn.jsdelivr.net/npm/marked@13/+esm";
+
 let uploadedDatasetName;
 let tableName;
 const loading = html`<div class="spinner-border" role="status">
@@ -26,7 +28,7 @@ document.getElementById("fileInput").addEventListener("change", function () {
     }
 
     // Send the POST request to the backend to upload files
-    fetch("http://localhost:8020/upload_csv/", {
+    fetch("http://127.0.0.1:8020/upload_csv/", {
         method: "POST",
         body: formData,
     })
@@ -102,21 +104,32 @@ function renderOutput(data) {
 }
 
 function parseSchema(schemaString) {
-    // Extract column definitions from the CREATE TABLE statement
-    const match = schemaString.match(/\((.*?)\)/s); // Match everything inside parentheses
-    if (!match) return [];
+    // Match the table creation syntax with column definitions
+    const match = schemaString.match(/\(([\s\S]*?)\)/); // Match everything inside parentheses
+    if (!match) {
+        renderError("Invalid schema format. Unable to extract column definitions.");
+        return [];
+    }
 
-    const columnDefinitions = match[1].split(",").map((col) => col.trim());
+    // Extract and clean up column definitions
+    const columnDefinitions = match[1]
+        .split(",")
+        .map((col) => col.trim())
+        .filter(Boolean); // Remove empty strings
 
     // Parse each column definition into name and type
     return columnDefinitions.map((colDef) => {
         const parts = colDef.match(/\[([^\]]+)\] (\w+)/); // Match [column_name] data_type
+        if (!parts) {
+            return { name: "Unknown", type: "Unknown" };
+        }
         return {
-            name: parts ? parts[1] : "Unknown",
-            type: parts ? parts[2] : "Unknown",
+            name: parts[1], // Extract column name
+            type: parts[2], // Extract data type
         };
     });
 }
+
 function renderError(errorMessage) {
     const errorOutput = html`
     <div class="alert alert-danger" role="alert">
@@ -146,7 +159,7 @@ async function executeQuery() {
     }
 
     try {
-        const response = await fetch("http://localhost:8020/query/", {
+        const response = await fetch("http://127.0.0.1:8020/query/", {
             method: "POST",
             headers: {
                 "Content-Type": "application/json",
@@ -247,6 +260,6 @@ function downloadTable() {
         console.error("No table name available for download.");
         return;
     }
-    window.location.href = `http://localhost:8020/download/${tableName}`;
+    window.location.href = `http://127.0.0.1:8020/download/${tableName}`;
 }
 document.getElementById("downloadButton").addEventListener("click", downloadTable);
