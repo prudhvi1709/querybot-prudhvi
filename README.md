@@ -39,7 +39,7 @@ This project is built using FastAPI for the backend and HTML with Bootstrap for 
    ```bash
    uv run app.py
    ```
-   Then, open your web browser and navigate to (http://localhost:8020) to access the Local Datachat application.
+   Then, open your web browser and navigate to (http://localhost:8030) to access the Local Datachat application.
 2. Use the interface to upload CSV files, execute queries, and download results.
 
 ## File Structure
