@@ -3,6 +3,7 @@
 # dependencies = [
 #     "duckdb",
 #     "fastapi",
+#     "numpy",
 #     "pandas",
 #     "pydantic",
 #     "python-dotenv",
@@ -25,6 +26,7 @@ from dotenv import load_dotenv
 import io
 import csv
 from typing import List
+import numpy as np
 
 app = FastAPI()
 
@@ -91,9 +93,8 @@ async def upload_csv(files: List[UploadFile] = File(...)):
         temp_file_path = f"./temp_{file.filename}"
         with open(temp_file_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
-
         # Load CSV into a Pandas DataFrame
-        df = pd.read_csv(temp_file_path)
+        df = pd.read_csv(temp_file_path, encoding='iso-8859-1')
         dataset_name = file.filename.split(".")[0]
 
         # Define dtype_mapping for DuckDB
@@ -160,30 +161,33 @@ async def query_data(request: QueryRequest):
         return JSONResponse(content={"error": f"Table '{dataset_name}' does not exist in DuckDB."}, status_code=404)
     print(f"Table '{dataset_name}' exists in DuckDB.")
 
-    # Constructing a single schema for all datasets
+    # Construct a combined schema for all datasets
     dataset_schemas = ""
     for name, dataset in datasets.items():
-        # Ensure schema_description is added only once per dataset
-        if isinstance(dataset.get("schema_description"), str):
-            dataset_schemas += f"Dataset name: {name}\nSchema: {dataset['schema_description']}\n\n"
+        schema_description = dataset.get("schema_description")
+        if schema_description and isinstance(schema_description, str):
+            dataset_schemas += f"Dataset name: {name}\nSchema: {schema_description}\n\n"
 
     # User query
     user_query = request.query
 
     # Construct LLM prompt with all dataset schemas and user query
-    llm_prompt = f"Here are the datasets available:\n{dataset_schemas}Please write an SQL query for the following question:\n{user_query}"
-    
+    llm_prompt = (
+        f"Here are the datasets available:\n{dataset_schemas}"
+        f"Please write an SQL query for the following question:\n{user_query}"
+    )
+
     # Call LLM with the prompt
     llm_response = call_llm_system_prompt(llm_prompt)
-    
+
     # Log the LLM response for debugging
-    print(llm_response)
+    print(f"LLM Response: {llm_response}")
 
     # Extract the SQL query from the response
     import re
-    sql_query = re.search(r'```sql\n(.*?)\n```', llm_response, re.DOTALL)
-    if sql_query:
-        sql_query = sql_query.group(1).strip()
+    sql_query_match = re.search(r'```sql\n(.*?)\n```', llm_response, re.DOTALL)
+    if sql_query_match:
+        sql_query = sql_query_match.group(1).strip()
     else:
         return JSONResponse(content={"error": "Failed to extract SQL query from the LLM response."}, status_code=400)
 
@@ -195,6 +199,10 @@ async def query_data(request: QueryRequest):
         result = con.execute(sql_query).fetchdf()
     except Exception as e:
         return JSONResponse(content={"error": f"Failed to execute query: {e}"}, status_code=400)
+
+    # Convert any non-JSON serializable types to compatible formats
+    result = result.apply(lambda col: col.map(lambda x: x.tolist() if isinstance(x, np.ndarray) else x))
+
 
     # Respond with the results
     return JSONResponse(content={
