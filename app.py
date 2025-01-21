@@ -230,5 +230,12 @@ load_dotenv()
 
 if __name__ == "__main__":
     import uvicorn
-
-    uvicorn.run(app, host="127.0.0.1", port=8020)
+    import subprocess
+    backend = subprocess.Popen(["uvicorn", "app:app", "--host", "127.0.0.1", "--port", "8020"])
+    frontend = subprocess.Popen(["python", "-m", "http.server", "8030"])
+    try:
+        backend.wait()
+        frontend.wait()
+    except KeyboardInterrupt:
+        backend.terminate()
+        frontend.terminate()
