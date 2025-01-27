@@ -12,7 +12,6 @@
     .narrative {
       max-width: 40rem;
     }
-
     .btn-custom {
       margin-right: 0.5rem;
     }
@@ -55,18 +54,22 @@
   <div class="container">
     <h1 class="mt-5 text-center">Local Datachat</h1>
 
-    <h2>Upload CSV</h2>
-    <input type="file" id="fileInput" name="files[]" multiple class="form-control mb-3" />
-    <div id="output" class="response-card mt-4"></div>
+    <h2>File Path</h2>
+    <div class="input-group mb-3">
+        <input type="text" id="filePathInput" class="form-control" placeholder="Enter full path to your CSV file..." />
+        <button id="loadFileButton" class="btn btn-primary">Load File</button>
+    </div>
+
+    <div id="output"></div>
 
     <h2>Execute Query</h2>
     <textarea id="queryInput" rows="4" class="form-control mb-3" placeholder="Enter your query here..."></textarea>
-    <button id="executeButton" class="btn btn-primary btn-custom">Execute Query</button>
+    <button id="executeButton" class="btn btn-primary btn-custom" disabled>Execute Query</button>
     <button id="downloadButton" class="btn btn-secondary">Download Table</button>
     <div id="responseOutput" class="response-card mt-3"></div>
   </div>
-  </div>
-  <script type="module" src="script.js"></script>
+
+  <script type="module" src="/js/script.js"></script>
 
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3/dist/js/bootstrap.bundle.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@gramex/ui@0.3/dist/dark-theme.js" type="module"></script>

@@ -16,11 +16,7 @@ This project is built using FastAPI for the backend and HTML with Bootstrap for 
    ```bash
    cd localdatachat
    ```
-3. Install the required dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
-4. Set the environment variable:
+3. Set the environment variable:
    To set the environment variable LLMFOUNDRY_TOKEN, follow these steps:
 
    **For Linux/Mac:**
@@ -37,25 +33,35 @@ This project is built using FastAPI for the backend and HTML with Bootstrap for 
 
 1. Start the FastAPI server and HTTP Server with the following command:
    ```bash
-   uv run app.py
+   uv run https://raw.githubusercontent.com/prudhvi1709/localdatachat/refs/heads/main/app.py
    ```
-   Then, open your web browser and navigate to (http://localhost:8030) to access the Local Datachat application.
+   Then, open your web browser and navigate to (http://localhost:8020) to access the Local Datachat application.
 2. Use the interface to upload CSV files, execute queries, and download results.
+   You can paste multiple paths separated by commas, and the paths should be without quotes. The application can accept the following file types:
+   - CSV
+   - .parquet
+   - SQLite .db
+   - .xlsx
+   - External MySQL databases from relational-data.org
 
 ## File Structure
 
 ```
-/project-directory
+/localdatachat
 │
 ├── app.py              # The main Python application file
-├── index.html          # The main HTML file for the frontend
+├── .env                # Environment variables file
+├── README.md           # The project README file
+├── static              # Directory for static files
+│   └── index.html      # The main HTML file for the frontend
+│   └── js              # Directory for JavaScript files
+│       └── script.js   # JavaScript file
 ├── requirements.txt    # The list of required Python packages
 ├── LICENSE             # The project license file
-└── README.md           # The project README file
 ```
 
 ## Features
-- **Upload CSV Files**: Users can upload datasets through the web interface.
+- **Upload Files**: Users can upload datasets (CSV, .parquet, SQLite .db, .xlsx, and external MySQL databases) through the web interface.
 - **Execute Queries**: Users can execute SQL queries against uploaded datasets.
 - **Download Results**: Users can download query results in a convenient format.
 
