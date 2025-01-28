@@ -15,17 +15,11 @@
 # ///
 import os
 import pandas as pd
-from fastapi import FastAPI, File, UploadFile, Path
+from fastapi import FastAPI, Path
 from fastapi.responses import JSONResponse
-from fastapi.responses import FileResponse
-from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-import shutil
 import duckdb
 from dotenv import load_dotenv
-import io
-import csv
-from typing import List
 import numpy as np
 from fastapi.staticfiles import StaticFiles
 import httpx
@@ -60,10 +54,11 @@ SYSTEM_PROMPT = (
 # In-memory storage for uploaded datasets
 datasets = {}
 
+
 # Helper function to call LLM API
 async def call_llm_system_prompt(user_input):
     headers = {
-        "Authorization": f"Bearer {os.environ['LLMFOUNDRY_TOKEN']}:localdatachat",
+        "Authorization": f"Bearer {os.environ['OPENAI_API_KEY']}:localdatachat",
     }
     payload = {
         "model": "gpt-4o-mini",
@@ -74,21 +69,24 @@ async def call_llm_system_prompt(user_input):
     }
     async with httpx.AsyncClient() as client:
         response = await client.post(
-            "https://llmfoundry.straive.com/openai/v1/chat/completions",
+            f"{os.environ['OPENAI_API_BASE']}/chat/completions",
             headers=headers,
             json=payload,
-            timeout=30.0  # Added timeout for safety
+            timeout=30.0,  # Added timeout for safety
         )
         response.raise_for_status()
         return response.json()["choices"][0]["message"]["content"]
+
 
 class QueryRequest(BaseModel):
     dataset_name: str
     query: str
     file_path: str
 
+
 class AnalyzeFileRequest(BaseModel):
     file_path: str  # Now this can contain comma-separated paths
+
 
 def get_schema_from_duckdb(file_path: str) -> tuple[str, str]:
     """Get schema using DuckDB's introspection capabilities."""
@@ -97,17 +95,19 @@ def get_schema_from_duckdb(file_path: str) -> tuple[str, str]:
         con = duckdb.connect(":memory:")
 
         # Handle different file types
-        if file_extension in ['.csv', '.txt']:
+        if file_extension in [".csv", ".txt"]:
             # For CSV files, try to infer schema
             con.execute(f"CREATE TABLE temp AS SELECT * FROM read_csv_auto('{file_path}')")
-        elif file_extension == '.parquet':
+        elif file_extension == ".parquet":
             con.execute(f"CREATE TABLE temp AS SELECT * FROM parquet_scan('{file_path}')")
-        elif file_extension == '.xlsx':
+        elif file_extension == ".xlsx":
             con.execute(f"CREATE TABLE temp AS SELECT * FROM read_excel('{file_path}')")
-        elif file_extension == '.db':
+        elif file_extension == ".db":
             # For SQLite databases, list all tables and let user choose
             con.execute(f"ATTACH '{file_path}' AS sqlite_db")
-            tables = con.execute("SELECT name FROM sqlite_db.sqlite_master WHERE type='table'").fetchall()
+            tables = con.execute(
+                "SELECT name FROM sqlite_db.sqlite_master WHERE type='table'"
+            ).fetchall()
             if not tables:
                 raise ValueError("No tables found in SQLite database")
             # Use first table for now (could be enhanced to handle multiple tables)
@@ -120,9 +120,11 @@ def get_schema_from_duckdb(file_path: str) -> tuple[str, str]:
         schema_info = con.execute("DESCRIBE temp").fetchall()
 
         # Generate schema description
-        schema_description = "CREATE TABLE dataset (\n" + ",\n".join(
-            [f"[{col[0]}] {col[1]}" for col in schema_info]
-        ) + "\n);"
+        schema_description = (
+            "CREATE TABLE dataset (\n"
+            + ",\n".join([f"[{col[0]}] {col[1]}" for col in schema_info])
+            + "\n);"
+        )
 
         # Get sample data for better question suggestions
         sample_data = con.execute("SELECT * FROM temp LIMIT 5").fetchall()
@@ -134,6 +136,7 @@ def get_schema_from_duckdb(file_path: str) -> tuple[str, str]:
         raise
     finally:
         con.close()
+
 
 def get_schema_from_mysql(connection_string: str) -> tuple[str, str]:
     """Get schema from MySQL database."""
@@ -148,19 +151,22 @@ def get_schema_from_mysql(connection_string: str) -> tuple[str, str]:
         schema_info = con.execute("DESCRIBE temp").fetchall()
         sample_data = con.execute("SELECT * FROM temp LIMIT 5").fetchall()
 
-        schema_description = "CREATE TABLE dataset (\n" + ",\n".join(
-            [f"[{col[0]}] {col[1]}" for col in schema_info]
-        ) + "\n);"
+        schema_description = (
+            "CREATE TABLE dataset (\n"
+            + ",\n".join([f"[{col[0]}] {col[1]}" for col in schema_info])
+            + "\n);"
+        )
 
         return schema_description, sample_data
     finally:
         con.close()
 
-@app.post("/upload_csv/")
+
+@app.post("/upload")
 async def upload_csv(request: AnalyzeFileRequest):
     try:
         # Split the file paths and process each file
-        file_paths = [path.strip() for path in request.file_path.split(',')]
+        file_paths = [path.strip() for path in request.file_path.split(",")]
         uploaded_datasets = []
 
         for file_path in file_paths:
@@ -178,33 +184,31 @@ async def upload_csv(request: AnalyzeFileRequest):
             )
             suggested_questions = await call_llm_system_prompt(user_prompt)
 
-            uploaded_datasets.append({
-                "dataset_name": dataset_name,
-                "schema": schema_description,
-                "suggested_questions": suggested_questions,
-                "file_type": Path(file_path).suffix.lower(),
-            })
+            uploaded_datasets.append(
+                {
+                    "dataset_name": dataset_name,
+                    "schema": schema_description,
+                    "suggested_questions": suggested_questions,
+                    "file_type": Path(file_path).suffix.lower(),
+                }
+            )
 
-        return {
-            "uploaded_datasets": uploaded_datasets
-        }
+        return {"uploaded_datasets": uploaded_datasets}
 
     except Exception as e:
         logger.error(f"Error processing files: {e}")
-        return JSONResponse(
-            content={"error": f"Error processing files: {str(e)}"},
-            status_code=400
-        )
+        return JSONResponse(content={"error": f"Error processing files: {str(e)}"}, status_code=400)
 
-@app.post("/query/")
+
+@app.post("/query")
 async def query_data(request: QueryRequest):
     try:
         # Split the file paths and process each file
-        file_paths = [path.strip() for path in request.file_path.split(',')]
+        file_paths = [path.strip() for path in request.file_path.split(",")]
 
         # Process each file and create tables in DuckDB
         for file_path in file_paths:
-            df = pd.read_csv(file_path, encoding='iso-8859-1')
+            df = pd.read_csv(file_path, encoding="iso-8859-1")
             dataset_name = os.path.splitext(os.path.basename(file_path))[0]
 
             # Define dtype_mapping for DuckDB
@@ -220,22 +224,28 @@ async def query_data(request: QueryRequest):
             try:
                 con.execute(f"DROP TABLE IF EXISTS {dataset_name};")
             except Exception as e:
-                return JSONResponse(content={"error": f"Error dropping table: {e}"}, status_code=400)
+                return JSONResponse(
+                    content={"error": f"Error dropping table: {e}"}, status_code=400
+                )
 
             # Create table in DuckDB
             con.register("data_table", df)
             con.execute(f"CREATE TABLE {dataset_name} AS SELECT * FROM data_table")
 
             # Generate schema description
-            schema_description = f"CREATE TABLE {dataset_name} (\n" + ",\n".join(
-                [f"[{col}] {dtype_mapping.get(str(df[col].dtype), 'TEXT')}" for col in df.columns]
-            ) + "\n);"
+            schema_description = (
+                f"CREATE TABLE {dataset_name} (\n"
+                + ",\n".join(
+                    [
+                        f"[{col}] {dtype_mapping.get(str(df[col].dtype), 'TEXT')}"
+                        for col in df.columns
+                    ]
+                )
+                + "\n);"
+            )
 
             # Store dataset info
-            datasets[dataset_name] = {
-                "data": df,
-                "schema_description": schema_description
-            }
+            datasets[dataset_name] = {"data": df, "schema_description": schema_description}
 
         # Rest of your existing query_data logic
         dataset_schemas = ""
@@ -259,11 +269,15 @@ async def query_data(request: QueryRequest):
         # Rest of your existing code for executing the query and returning results
         # Extract the SQL query from the response
         import re
-        sql_query_match = re.search(r'```sql\n(.*?)\n```', llm_response, re.DOTALL)
+
+        sql_query_match = re.search(r"```sql\n(.*?)\n```", llm_response, re.DOTALL)
         if sql_query_match:
             sql_query = sql_query_match.group(1).strip()
         else:
-            return JSONResponse(content={"error": "Failed to extract SQL query from the LLM response."}, status_code=400)
+            return JSONResponse(
+                content={"error": "Failed to extract SQL query from the LLM response."},
+                status_code=400,
+            )
 
         # Log the extracted SQL query (for debugging)
         print(f"Extracted SQL Query: {sql_query}")
@@ -272,19 +286,41 @@ async def query_data(request: QueryRequest):
         result = con.execute(sql_query).fetchdf()
 
         # Convert any non-JSON serializable types to compatible formats
-        result = result.apply(lambda col: col.map(lambda x: x.tolist() if isinstance(x, np.ndarray) else x))
+        result = result.apply(
+            lambda col: col.map(lambda x: x.tolist() if isinstance(x, np.ndarray) else x)
+        )
         # Respond with the results
         if isinstance(llm_response, float):
-            if llm_response == float('inf') or llm_response == float('-inf') or (isinstance(llm_response, float) and llm_response != llm_response):
+            if (
+                llm_response == float("inf")
+                or llm_response == float("-inf")
+                or (isinstance(llm_response, float) and llm_response != llm_response)
+            ):
                 llm_response = None  # or set to 0, depending on your needs
-        return JSONResponse(content={
-            "result": result.to_dict(orient="records"),
-            "generated_query": sql_query,
-            "llm_response": llm_response
-        })
+        return JSONResponse(
+            content={
+                "result": result.to_dict(orient="records"),
+                "generated_query": sql_query,
+                "llm_response": llm_response,
+            }
+        )
 
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=400)
+
+
+class SettingsRequest(BaseModel):
+    key: str
+    base: str
+
+
+@app.post("/settings")
+async def save_settings(request: SettingsRequest):
+    # Save the settings to the environment variables
+    os.environ["OPENAI_API_KEY"] = request.key
+    os.environ["OPENAI_API_BASE"] = request.base
+    return {"status": "Settings saved successfully"}
+
 
 # Mount static files directory LAST
 app.mount("/", StaticFiles(directory="static", html=True), name="static")
@@ -292,8 +328,9 @@ load_dotenv()
 if __name__ == "__main__":
     import uvicorn
     import logging
+
     logger = logging.getLogger(__name__)
-    PORT = int(os.getenv("PORT", 8020))
+    PORT = int(os.getenv("PORT", 8000))
     try:
         uvicorn.run(app, host="0.0.0.0", port=PORT)
     except BaseException as e:
