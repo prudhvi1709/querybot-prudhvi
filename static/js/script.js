@@ -6,6 +6,17 @@ const marked = new Marked();
 
 const $openaiApiKey = document.getElementById("openai-api-key");
 const $openaiApiBase = document.getElementById("openai-api-base");
+const $toast = document.getElementById("toast");
+const toast = new bootstrap.Toast($toast);
+
+function notify(cls, title, message) {
+  $toast.querySelector(".toast-title").textContent = title;
+  $toast.querySelector(".toast-body").textContent = message;
+  const $toastHeader = $toast.querySelector(".toast-header");
+  $toastHeader.classList.remove("text-bg-success", "text-bg-danger", "text-bg-warning", "text-bg-info");
+  $toastHeader.classList.add(`text-bg-${cls}`);
+  toast.show();
+}
 
 // Define loading template
 const loading = html` <div class="card">
@@ -144,7 +155,7 @@ async function executeQuery() {
     const response = await fetch("/query", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ dataset_name: "dataset", query, file_path: filePath }),
+      body: JSON.stringify({ dataset_name: "dataset", query, file_paths: filePath.split(/\s*,\s*/) }),
     });
 
     if (!response.ok) throw new Error(`Error executing query: ${response.statusText}`);
@@ -189,7 +200,7 @@ async function loadFile() {
     const response = await fetch("/upload", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ file_path: filePath }),
+      body: JSON.stringify({ file_paths: filePath.split(/\s*,\s*/) }),
     });
 
     if (!response.ok) throw new Error(`Error loading file: ${response.statusText}`);
@@ -249,17 +260,31 @@ function downloadCSV(data, filename = "data.csv") {
   URL.revokeObjectURL(link.href);
 }
 
+async function listFiles() {
+  const response = await fetch("/list-files");
+  const data = await response.json();
+  const fileList = document.getElementById("fileList");
+  render(html`<ul class="list-group">${data.files.map((file) => html`<li class="list-group-item">${file}</li>`).join("")}</ul>`, fileList);
+}
+
 document.getElementById("settings").addEventListener("submit", async (event) => {
   event.preventDefault();
   document.querySelector("#settings .loading").classList.remove("d-none");
-  await fetch("/settings", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ key: $openaiApiKey.value, base: $openaiApiBase.value }),
-  });
+  let response;
+  try {
+    response = await fetch("/settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ key: $openaiApiKey.value, base: $openaiApiBase.value }),
+    });
+  } catch (e) {
+    return notify("danger", "Could not save settings", e.message);
+  } finally {
+    document.querySelector("#settings .loading").classList.add("d-none");
+  }
+  if (!response.ok) return notify("danger", "Could not save settings", await response.text());
   localStorage.setItem("localDataChatOpenAIAPIKey", $openaiApiKey.value);
   localStorage.setItem("localDataChatOpenAIAPIBase", $openaiApiBase.value);
-  document.querySelector("#settings .loading").classList.add("d-none");
   document.querySelector("#settings .saved").classList.remove("d-none");
   setTimeout(() => {
     document.querySelector("#settings .saved").classList.add("d-none");

@@ -1,31 +1,20 @@
-# /// script
-# requires-python = ">=3.13"
-# dependencies = [
-#     "duckdb",
-#     "fastapi",
-#     "httpx",
-#     "numpy",
-#     "pandas",
-#     "pydantic",
-#     "python-dotenv",
-#     "python-multipart",
-#     "requests",
-#     "uvicorn",
-# ]
-# ///
-import os
-import pandas as pd
+from dotenv import load_dotenv
 from fastapi import FastAPI, Path
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
-import duckdb
-from dotenv import load_dotenv
-import numpy as np
 from fastapi.staticfiles import StaticFiles
-import httpx
 from pathlib import Path
+from platformdirs import user_config_dir
+from pydantic import BaseModel
+from typing import List
+import duckdb
+import httpx
+import json
 import logging
+import numpy as np
+import os
+import pandas as pd
 
+config_dir = user_config_dir("dataquery")
 app = FastAPI()
 
 # Initialize DuckDB and load extensions
@@ -85,7 +74,7 @@ class QueryRequest(BaseModel):
 
 
 class AnalyzeFileRequest(BaseModel):
-    file_path: str  # Now this can contain comma-separated paths
+    file_paths: List[str]  # Now this can contain comma-separated paths
 
 
 def get_schema_from_duckdb(file_path: str) -> tuple[str, str]:
@@ -162,42 +151,41 @@ def get_schema_from_mysql(connection_string: str) -> tuple[str, str]:
         con.close()
 
 
+@app.get("/list-files")
+async def list_files():
+    return {"files": [f.name for f in Path(config_dir).glob("*.csv")]}
+
+
 @app.post("/upload")
 async def upload_csv(request: AnalyzeFileRequest):
-    try:
-        # Split the file paths and process each file
-        file_paths = [path.strip() for path in request.file_path.split(",")]
-        uploaded_datasets = []
+    # Split the file paths and process each file
+    uploaded_datasets = []
 
-        for file_path in file_paths:
-            dataset_name = Path(file_path).stem
+    for file_path in request.file_paths:
+        dataset_name = Path(file_path).stem
 
-            # Get schema and sample data using DuckDB
-            schema_description, sample_data = get_schema_from_duckdb(file_path)
+        # Get schema and sample data using DuckDB
+        schema_description, sample_data = get_schema_from_duckdb(file_path)
 
-            # Generate suggested questions using LLM with schema and sample data
-            user_prompt = (
-                f"Dataset name: {dataset_name}\n"
-                f"Schema: {schema_description}\n"
-                f"Sample data (first 5 rows): {sample_data}\n"
-                "Please provide 5 suggested questions that can be answered using SQL queries on this dataset."
-            )
-            suggested_questions = await call_llm_system_prompt(user_prompt)
+        # Generate suggested questions using LLM with schema and sample data
+        user_prompt = (
+            f"Dataset name: {dataset_name}\n"
+            f"Schema: {schema_description}\n"
+            f"Sample data (first 5 rows): {sample_data}\n"
+            "Please provide 5 suggested questions that can be answered using SQL queries on this dataset."
+        )
+        suggested_questions = await call_llm_system_prompt(user_prompt)
 
-            uploaded_datasets.append(
-                {
-                    "dataset_name": dataset_name,
-                    "schema": schema_description,
-                    "suggested_questions": suggested_questions,
-                    "file_type": Path(file_path).suffix.lower(),
-                }
-            )
+        uploaded_datasets.append(
+            {
+                "dataset_name": dataset_name,
+                "schema": schema_description,
+                "suggested_questions": suggested_questions,
+                "file_type": Path(file_path).suffix.lower(),
+            }
+        )
 
-        return {"uploaded_datasets": uploaded_datasets}
-
-    except Exception as e:
-        logger.error(f"Error processing files: {e}")
-        return JSONResponse(content={"error": f"Error processing files: {str(e)}"}, status_code=400)
+    return {"uploaded_datasets": uploaded_datasets}
 
 
 @app.post("/query")
@@ -319,6 +307,8 @@ async def save_settings(request: SettingsRequest):
     # Save the settings to the environment variables
     os.environ["OPENAI_API_KEY"] = request.key
     os.environ["OPENAI_API_BASE"] = request.base
+    with open(os.path.join(config_dir, "settings.json"), "w") as f:
+        json.dump({"OPENAI_API_KEY": request.key, "OPENAI_API_BASE": request.base}, f)
     return {"status": "Settings saved successfully"}
 
 
@@ -331,6 +321,13 @@ if __name__ == "__main__":
 
     logger = logging.getLogger(__name__)
     PORT = int(os.getenv("PORT", 8000))
+
+    if not os.path.exists(config_dir):
+        os.makedirs(config_dir)
+    if os.path.exists(os.path.join(config_dir, "settings.json")):
+        with open(os.path.join(config_dir, "settings.json"), "r") as f:
+            for key, value in json.load(f).items():
+                os.environ[key] = value
     try:
         uvicorn.run(app, host="0.0.0.0", port=PORT)
     except BaseException as e:
