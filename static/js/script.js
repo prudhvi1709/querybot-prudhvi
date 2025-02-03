@@ -137,7 +137,7 @@ function renderError(errorMessage) {
   render(errorTemplate, DOM.output() || DOM.responseOutput());
 }
 
-// Optimized executeQuery function
+// Update executeQuery function to include explanation functionality
 async function executeQuery() {
   const responseOutput = DOM.responseOutput();
   if (!responseOutput) return;
@@ -155,12 +155,32 @@ async function executeQuery() {
     const response = await fetch("/query", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ dataset_name: "dataset", query, file_paths: filePath.split(/\s*,\s*/) }),
+      body: JSON.stringify({
+        dataset_name: "dataset",
+        query,
+        file_path: filePath,
+        extract_sql: true, // Add this flag to indicate we want SQL extraction
+      }),
     });
 
-    if (!response.ok) throw new Error(`Error executing query: ${response.statusText}`);
-
     const result = await response.json();
+    if (!response.ok) {
+      const errorTemplate = html`
+        <div class="alert alert-danger" role="alert">
+          <h5>Error: ${result.error}</h5>
+          ${result.llm_response
+            ? html`
+                <hr />
+                <h6>LLM Response:</h6>
+                <div>${unsafeHTML(marked.parse(result.llm_response))}</div>
+              `
+            : ""}
+        </div>
+      `;
+      render(errorTemplate, responseOutput);
+      return;
+    }
+
     const queryOutput = html`
       <div class="card">
         <div class="card-header">
@@ -171,9 +191,27 @@ async function executeQuery() {
           <div>${unsafeHTML(marked.parse(result.llm_response))}</div>
           <h6>SQL Query Execution Result:</h6>
           <div id="sqlResultTable"></div>
-          <button class="btn btn-primary mt-3" @click=${() => downloadCSV(result.result, "query_result.csv")}>
-            <i class="bi bi-download"></i> Download Results as CSV
-          </button>
+          <div class="mt-3">
+            <button class="btn btn-primary me-2" @click=${() => downloadCSV(result.result, "query_result.csv")}>
+              <i class="bi bi-download"></i> Download Results as CSV
+            </button>
+            <div class="row mt-2">
+              <div class="col-md-8">
+                <input
+                  type="text"
+                  id="additionalPrompt"
+                  class="form-control"
+                  placeholder="Optional: Add specific instructions for the explanation..."
+                />
+              </div>
+              <div class="col-md-4">
+                <button class="btn btn-info" @click=${() => explainResults(result.result, query)}>
+                  <i class="bi bi-lightbulb"></i> Explain Results
+                </button>
+              </div>
+            </div>
+          </div>
+          <div id="explanationOutput" class="mt-3"></div>
         </div>
       </div>
     `;
@@ -182,6 +220,66 @@ async function executeQuery() {
     document.getElementById("sqlResultTable").innerHTML = generateTable(result.result);
   } catch (error) {
     renderError(error.message);
+  }
+}
+
+// Add new explainResults function
+async function explainResults(data, originalQuery) {
+  const explanationOutput = document.getElementById("explanationOutput");
+  const additionalPrompt = document.getElementById("additionalPrompt")?.value.trim();
+  render(loading, explanationOutput);
+
+  try {
+    const systemPrompt = `You are a friendly data interpreter helping non-technical and technical users understand their data. Your task is to:
+1. Analyze the data results in relation to the original question
+2. Provide clear explanations using plain language
+3. Point out specific values and patterns in the data
+4. Highlight any interesting or unexpected findings
+5. Suggest potential follow-up questions if relevant
+Remember to be specific and reference actual values from the data to support your analysis.`;
+
+    const formattedData = data
+      .map((row, index) => {
+        return `Row ${index + 1}: ${JSON.stringify(row, null, 2)}`;
+      })
+      .join("\n");
+
+    const userMessage = additionalPrompt
+      ? `Question asked: "${originalQuery}"\nAdditional instructions: ${additionalPrompt}\n\nData Results:\n${formattedData}`
+      : `Question asked: "${originalQuery}"\n\nData Results:\n${formattedData}`;
+
+    const response = await fetch("/query", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        dataset_name: "explanation",
+        query: userMessage,
+        file_path: DOM.filePathInput()?.value.trim() || "",
+        system_prompt: systemPrompt,
+        is_explanation: true,
+      }),
+    });
+
+    if (!response.ok) throw new Error(`Error getting explanation: ${response.statusText}`);
+
+    const result = await response.json();
+    const explanationTemplate = html`
+      <div class="card">
+        <div class="card-header">
+          <h6>Answer Analysis</h6>
+        </div>
+        <div class="card-body">
+          <p class="fw-bold">Question: ${originalQuery}</p>
+          ${additionalPrompt ? html`<p class="text-muted">Additional Instructions: ${additionalPrompt}</p>` : ""}
+          <hr />
+          ${unsafeHTML(marked.parse(result.llm_response))}
+        </div>
+      </div>
+    `;
+
+    render(explanationTemplate, explanationOutput);
+  } catch (error) {
+    renderError(`Failed to get explanation: ${error.message}`);
   }
 }
 
@@ -264,7 +362,12 @@ async function listFiles() {
   const response = await fetch("/list-files");
   const data = await response.json();
   const fileList = document.getElementById("fileList");
-  render(html`<ul class="list-group">${data.files.map((file) => html`<li class="list-group-item">${file}</li>`).join("")}</ul>`, fileList);
+  render(
+    html`<ul class="list-group">
+      ${data.files.map((file) => html`<li class="list-group-item">${file}</li>`).join("")}
+    </ul>`,
+    fileList
+  );
 }
 
 document.getElementById("settings").addEventListener("submit", async (event) => {
@@ -293,6 +396,6 @@ document.getElementById("settings").addEventListener("submit", async (event) => 
 });
 
 document.querySelector("#openai-api-key").value = localStorage.getItem("localDataChatOpenAIAPIKey");
-document.querySelector("#openai-api-base").value = localStorage.getItem("localDataChatOpenAIAPIBase") ?? "https://llmfoundry.straive.com/openai/v1";
-if (!document.querySelector("#openai-api-key").value)
-  document.querySelector("#settings").classList.add("show");
+document.querySelector("#openai-api-base").value =
+  localStorage.getItem("localDataChatOpenAIAPIBase") ?? "https://llmfoundry.straive.com/openai/v1";
+if (!document.querySelector("#openai-api-key").value) document.querySelector("#settings").classList.add("show");

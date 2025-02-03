@@ -1,4 +1,4 @@
-# Local Datachat
+# Query Bot
 
 A web application that allows users to upload CSV files, execute queries, and download results.
 
@@ -12,7 +12,7 @@ This project is built using FastAPI for the backend and HTML with Bootstrap for 
    ```bash
    uv run https://raw.githubusercontent.com/prudhvi1709/localdatachat/refs/heads/main/app.py
    ```
-   Then, open your web browser and navigate to (http://localhost:8000) to access the Local Datachat application.
+   Then, open your web browser and navigate to (http://localhost:8000) to access the Query Bot application.
 1. Use the interface to upload CSV files, execute queries, and download results.
    You can paste multiple paths separated by commas, and the paths should be without quotes. The application can accept the following file types:
    - CSV
