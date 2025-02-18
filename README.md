@@ -24,7 +24,7 @@ This project is built using FastAPI for the backend and HTML with Bootstrap for 
 ## File Structure
 
 ```
-/localdatachat
+/querybot
 │
 ├── app.py              # The main Python application file
 ├── .env                # Environment variables file
