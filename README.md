@@ -2,21 +2,33 @@
 
 A powerful web application that enables users to upload various data formats, execute SQL queries, and download results through an intuitive interface.
 
+## Table of Contents
+- [Overview](#overview)
+- [Features](#features)
+- [Getting Started](#getting-started)
+- [Development](#development)
+- [License](#license)
+- [Additional Resources](#additional-resources)
+- [FAQ](#faq)
+
 ## Overview
 
 QueryBot is built with FastAPI for the backend and a responsive HTML/Bootstrap frontend. It provides a seamless experience for data analysis by allowing users to query multiple data sources through a unified SQL interface.
 
 ## Features
 
-- **Multi-format Support**: Query CSV, Parquet, SQLite, Excel files, and MySQL databases with a single interface
+- **Multi-format Support**: Query CSV, Parquet, SQLite, Excel files, and MySQL databases with a single interface.
+  - *Example*: Users can upload a CSV file and query it directly.
 - **Interactive SQL Editor**: Writes and executes SQL queries with syntax highlighting. The application automatically generates DuckDB queries and runs on datasets. It supports multiple files if the paths are provided separated by commas.
 - **Real-time Results**: View query results instantly in a paginated table format
-- **Export Functionality**: Download query results in CSV format for further analysis
+- **Export Functionality**: Download query results in CSV format for further analysis. *Note*: Currently, only CSV format is supported for export.
 - **Responsive Design**: Works seamlessly across desktop and mobile devices
 
 ## Getting Started
 
 ### Installation
+
+> **Note**: Installation is optional as `uvx` will handle the necessary setup.
 
 ```bash
 pip install querybot
@@ -96,3 +108,15 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ## Query Result
 
 ![Query Result](Screenshot.png)
+
+## Contribution Guidelines
+
+We welcome contributions! Please see our [CONTRIBUTING.md](CONTRIBUTING.md) for more details.
+
+## FAQ
+
+**Q: What data formats are supported?**
+A: The application supports CSV, Parquet, SQLite, Excel, and MySQL formats.
+
+**Q: How do I report an issue?**
+A: Please use the [Issue Tracker](https://github.com/gramener/querybot/issues) to report any issues you encounter.
