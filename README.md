@@ -1,48 +1,98 @@
-# Query Bot
+# QueryBot
 
-A web application that allows users to upload CSV files, execute queries, and download results.
+A powerful web application that enables users to upload various data formats, execute SQL queries, and download results through an intuitive interface.
 
-## Description
+## Overview
 
-This project is built using FastAPI for the backend and HTML with Bootstrap for the frontend. Users can upload datasets, execute SQL queries, and interact with the data through a user-friendly interface.
+QueryBot is built with FastAPI for the backend and a responsive HTML/Bootstrap frontend. It provides a seamless experience for data analysis by allowing users to query multiple data sources through a unified SQL interface.
 
-## Usage
+## Features
 
-1. Start the FastAPI server and HTTP Server with the following command:
+- **Multi-format Support**: Query CSV, Parquet, SQLite, Excel files, and MySQL databases with a single interface
+- **Interactive SQL Editor**: Writes and executes SQL queries with syntax highlighting. The application automatically generates DuckDB queries and runs on datasets. It supports multiple files if the paths are provided separated by commas.
+- **Real-time Results**: View query results instantly in a paginated table format
+- **Export Functionality**: Download query results in CSV format for further analysis
+- **Responsive Design**: Works seamlessly across desktop and mobile devices
+
+## Getting Started
+
+### Installation
+
+```bash
+pip install querybot
+```
+
+### Running the Application
+
+1. Start the application with a single command using `uv`:
    ```bash
-   uv run https://raw.githubusercontent.com/prudhvi1709/localdatachat/refs/heads/main/app.py
+   uvx querybot
    ```
-   Then, open your web browser and navigate to (http://localhost:8000) to access the Query Bot application.
-1. Use the interface to upload CSV files, execute queries, and download results.
-   You can paste multiple paths separated by commas, and the paths should be without quotes. The application can accept the following file types:
-   - CSV
-   - .parquet
-   - SQLite .db
-   - .xlsx
-   - External MySQL databases from relational-data.org
+2. Open your web browser and navigate to [http://localhost:8001](http://localhost:8001) to access the QueryBot interface.
 
-## File Structure
+### Usage
+
+1. **Upload Data**: Use the interface to specify data sources by:
+   - Entering file paths (multiple paths can be separated by commas, without quotes)
+   - Uploading files directly through the browser
+
+2. **Supported Data Formats**:
+   - CSV files (`.csv`)
+   - Parquet files (`.parquet`)
+   - SQLite databases (`.db`)
+   - Excel spreadsheets (`.xlsx`)
+   - External MySQL databases (from relational-data.org)
+
+3. **Execute Queries**: Write SQL queries in the editor and click "Run Query" to see results.
+
+4. **Export Results**: Download query results as CSV files for further analysis or reporting.
+
+## Project Structure
 
 ```
 /querybot
 │
-├── app.py              # The main Python application file
-├── .env                # Environment variables file
-├── README.md           # The project README file
-├── static              # Directory for static files
-│   └── index.html      # The main HTML file for the frontend
-│   └── js              # Directory for JavaScript files
-│       └── script.js   # JavaScript file
-├── requirements.txt    # The list of required Python packages
-├── LICENSE             # The project license file
+├── querybot              # Main package directory
+│   ├── app.py            # FastAPI application entry point
+│   ├── __init__.py       # Package initialization
+│   ├── static            # Static assets
+│   │   ├── index.html    # Main frontend interface
+│   │   └── js            # JavaScript resources
+│   │       └── script.js # Frontend functionality
+├── pyproject.toml        # Project metadata and dependencies
+├── .gitignore            # Git ignore configuration
+├── uv.lock               # Dependency lock file
+├── README.md             # Project documentation
 ```
 
-## Features
+## Development
 
-- **Upload Files**: Users can upload datasets (CSV, .parquet, SQLite .db, .xlsx, and external MySQL databases) through the web interface.
-- **Execute Queries**: Users can execute SQL queries against uploaded datasets.
-- **Download Results**: Users can download query results in a convenient format.
+### Prerequisites
+
+- Python 3.8+
+
+### Setting Up Development Environment
+
+1. Clone the repository:
+   ```bash
+   git clone https://github.com/gramener/querybot.git
+   cd querybot
+   ```
+
+2. Install dependencies:
+   ```bash
+   pip install -e ".[dev]"
+   ```
 
 ## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+## Additional Resources
+
+- [QueryBot on PyPI](https://pypi.org/project/querybot/)
+- [Issue Tracker](https://github.com/gramener/querybot/issues)
+
+## Query Result
+
+![Query Result](Screenshot.png)
