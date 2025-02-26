@@ -1,5 +1,5 @@
 from dotenv import load_dotenv
-from fastapi import FastAPI, Path
+from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pathlib import Path
@@ -13,6 +13,8 @@ import logging
 import numpy as np
 import os
 import pandas as pd
+
+load_dotenv()
 
 config_dir = user_config_dir("dataquery")
 app = FastAPI()
@@ -142,7 +144,7 @@ def get_schema_from_duckdb(file_path: str) -> tuple[str, str]:
         return schema_description, sample_data
 
     except Exception as e:
-        logger.error(f"Error reading file {file_path}: {e}")
+        logging.error(f"Error reading file {file_path}: {e}")
         raise
     finally:
         con.close()
@@ -153,8 +155,8 @@ def get_schema_from_mysql(connection_string: str) -> tuple[str, str]:
     con = duckdb.connect(":memory:")
     try:
         # Use DuckDB's MySQL scanner
-        con.execute(f"INSTALL mysql")
-        con.execute(f"LOAD mysql")
+        con.execute("INSTALL mysql")
+        con.execute("LOAD mysql")
         con.execute(f"CREATE TABLE temp AS SELECT * FROM mysql_scan('{connection_string}')")
 
         # Get schema and sample data
@@ -379,11 +381,12 @@ async def save_settings(request: SettingsRequest):
 
 
 # Mount static files directory LAST
-app.mount("/", StaticFiles(directory="./static", html=True), name="static")
-load_dotenv()
-if __name__ == "__main__":
+static_dir = os.path.join(os.path.dirname(__file__), "static")
+app.mount("/", StaticFiles(directory=static_dir, html=True), name="static")
+
+
+def main():
     import uvicorn
-    import logging
 
     logger = logging.getLogger(__name__)
     PORT = int(os.getenv("PORT", 8001))
@@ -399,3 +402,7 @@ if __name__ == "__main__":
     except BaseException as e:
         logger.error(f"Running locally. Cannot be accessed from outside: {e}")
         uvicorn.run(app, host="127.0.0.1", port=PORT)
+
+
+if __name__ == "__main__":
+    main()
