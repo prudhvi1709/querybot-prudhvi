@@ -96,6 +96,17 @@ pip install querybot
    pip install -e ".[dev]"
    ```
 
+## Deployment
+
+Modify the `pyproject.toml` file to change the version number.
+
+```bash
+uv build
+uv publish
+```
+
+This is deployed to [pypi](https://pypi.org/project/querybot/) as [s.anand@gramener.com](s.anand@gramener.com)
+
 ## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
