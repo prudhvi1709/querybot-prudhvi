@@ -14,11 +14,30 @@ import numpy as np
 import os
 import pandas as pd
 import re
+import math
+
+# Custom JSON encoder to handle non-serializable values
+class CustomJSONEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, (np.integer, np.floating, np.bool_)):
+            return obj.item()
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+        if isinstance(obj, pd.Series):
+            return obj.tolist()
+        if isinstance(obj, (pd.Timestamp, pd._libs.tslibs.timestamps.Timestamp)):
+            return obj.isoformat()
+        if isinstance(obj, float) and (math.isnan(obj) or math.isinf(obj)):
+            return None
+        return super().default(obj)
 
 load_dotenv()
 
 config_dir = user_config_dir("dataquery")
 app = FastAPI()
+
+# Use custom JSON encoder for all responses
+app.json_encoder = CustomJSONEncoder
 
 # Initialize DuckDB and load extensions
 con = duckdb.connect(":memory:")
@@ -53,6 +72,13 @@ SYSTEM_PROMPT = (
     "3. Use straightforward GROUP BY and aggregations\n"
     "4. Never use LIMIT, Display all results\n"
     "5. Focus on finding meaningful patterns in the data\n\n"
+    "When working with dates in DuckDB:\n"
+    "1. Never use DATE() function directly on columns\n"
+    "2. Do NOT use julianday() function (it doesn't exist in DuckDB)\n"
+    "3. Use TRY_CAST(column_name AS DATE) for date conversions\n"
+    "4. For date differences, use DATE_DIFF('day', date1, date2) function\n"
+    "5. For date comparisons, use the BETWEEN operator or simple comparison operators\n"
+    "6. For date operations, use date_sub(), date_add() functions\n\n"
     "For the output, follow this structure:\n"
     "1. Guess the objective of the user based on their query.\n"
     "2. Describe the steps to achieve this objective in SQL.\n"
@@ -67,20 +93,29 @@ datasets = {}
 
 
 # Helper function to call LLM API
-async def call_llm_system_prompt(user_input):
+async def call_llm_system_prompt(user_input, model="gpt-4.1-nano", api_base=None):
+    # Use the system prompt directly, no need to check for date handling
+    current_prompt = SYSTEM_PROMPT
+    
     headers = {
         "Authorization": f"Bearer {os.environ['OPENAI_API_KEY']}:querybot",
     }
     payload = {
-        "model": "gpt-4o-mini",
+        "model": model,
         "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": current_prompt},
             {"role": "user", "content": user_input},
         ],
     }
+    
+    # Use custom API base URL if provided, otherwise use the default
+    base_url = api_base if api_base else os.environ['OPENAI_API_BASE']
+    
     async with httpx.AsyncClient() as client:
+        # Check if the base URL already ends with /chat/completions
+        url = base_url if base_url.endswith("/chat/completions") else f"{base_url}/chat/completions"
         response = await client.post(
-            f"{os.environ['OPENAI_API_BASE']}/chat/completions",
+            url,
             headers=headers,
             json=payload,
             timeout=30.0,  # Added timeout for safety
@@ -95,6 +130,8 @@ class QueryRequest(BaseModel):
     file_path: str
     is_explanation: bool = False
     system_prompt: str | None = None  # Make system_prompt optional
+    model: str = "gpt-4.1-nano"  # Default model
+    api_base: str | None = None  # Optional custom API base URL
 
 class AnalyzeFileRequest(BaseModel):
     file_paths: List[str]  # Now this can contain comma-separated paths
@@ -196,7 +233,7 @@ async def upload_csv(request: AnalyzeFileRequest):
             f"Schema: {schema_description}\n"
             "Please provide 5 suggested questions (ONLY QUESTIONS, NO EXPLANATION, NO Serial Numbers) that can be answered using duckDB queries on this dataset."
         )
-        suggested_questions = await call_llm_system_prompt(user_prompt)
+        suggested_questions = await call_llm_system_prompt(user_prompt, "gpt-4.1-nano")
 
         uploaded_datasets.append({
                 "dataset_name": dataset_name,
@@ -227,13 +264,18 @@ async def query_data(request: QueryRequest):
                 "Authorization": f"Bearer {os.environ['OPENAI_API_KEY']}:querybot",
             }
             payload = {
-                "model": "gpt-4o-mini",
+                "model": request.model,
                 "messages": messages,
             }
 
+            # Use custom API base URL if provided, otherwise use the default
+            api_base = request.api_base if request.api_base else os.environ['OPENAI_API_BASE']
+            
             async with httpx.AsyncClient() as client:
+                # Check if the base URL already ends with /chat/completions
+                url = api_base if api_base.endswith("/chat/completions") else f"{api_base}/chat/completions"
                 response = await client.post(
-                    f"{os.environ['OPENAI_API_BASE']}/chat/completions",
+                    url,
                     headers=headers,
                     json=payload,
                     timeout=30.0,
@@ -259,8 +301,10 @@ async def query_data(request: QueryRequest):
 
         # Process each file and create tables in DuckDB
         for file_path in file_paths:
-            df = pd.read_csv(file_path, encoding="utf-8", encoding_errors="replace")
-
+            df = pd.read_csv(file_path, encoding="utf-8", encoding_errors="replace", dayfirst=True)
+            
+            # No need for the date conversion logic since we're using dayfirst=True
+            
             # Sanitize dataset name to be SQL compatible
             dataset_name = os.path.splitext(os.path.basename(file_path))[0]
             # Replace spaces, dashes, and other non-alphanumeric chars with underscores
@@ -325,7 +369,11 @@ async def query_data(request: QueryRequest):
         )
 
         # Call LLM with the prompt
-        llm_response = await call_llm_system_prompt(llm_prompt)
+        llm_response = await call_llm_system_prompt(
+            llm_prompt, 
+            request.model, 
+            request.api_base
+        )
 
         # Extract the SQL query from the response
         sql_query_match = re.search(r"```sql\n(.*?)\n```", llm_response, re.DOTALL)
@@ -340,7 +388,16 @@ async def query_data(request: QueryRequest):
                 }, status_code=400)
 
         sql_query = sql_query_match.group(1).strip()
-
+        
+        # Fix common date syntax issues in DuckDB
+        # Replace DATE() function with TRY_CAST as DATE
+        date_func_pattern = r'DATE\s*\(\s*([^)]+)\s*\)'
+        sql_query = re.sub(date_func_pattern, r'TRY_CAST(\1 AS DATE)', sql_query)
+        
+        # Replace julianday() function with proper DuckDB date diff
+        julianday_pattern = r'julianday\s*\(\s*([^)]+)\s*\)\s*-\s*julianday\s*\(\s*([^)]+)\s*\)'
+        sql_query = re.sub(julianday_pattern, r"DATE_DIFF('day', TRY_CAST(\2 AS DATE), TRY_CAST(\1 AS DATE))", sql_query)
+        
         # Log the extracted SQL query (for debugging)
         print(f"Extracted SQL Query: {sql_query}")
 
@@ -348,6 +405,7 @@ async def query_data(request: QueryRequest):
         try:
             result = con.execute(sql_query).fetchdf()
         except Exception as query_error:
+            # No need for special date handling anymore
             return JSONResponse(content={
                 "error": f"Error executing query: {str(query_error)}",
                 "generated_query": sql_query,
@@ -358,6 +416,15 @@ async def query_data(request: QueryRequest):
         result = result.apply(
             lambda col: col.map(lambda x: x.tolist() if isinstance(x, np.ndarray) else x)
         )
+        
+        # Handle non-JSON-compliant float values (NaN, inf)
+        def sanitize_json_value(x):
+            if isinstance(x, float) and (math.isnan(x) or math.isinf(x)):
+                return None
+            return x
+            
+        result = result.applymap(sanitize_json_value)
+        
         # Respond with the results
         if isinstance(llm_response, float):
             if (
