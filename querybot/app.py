@@ -75,7 +75,9 @@ SYSTEM_PROMPT = (
     "When working with dates in DuckDB:\n"
     "1. Never use DATE() function directly on columns\n"
     "2. Do NOT use julianday() function (it doesn't exist in DuckDB)\n"
-    "3. Use TRY_CAST(column_name AS DATE) for date conversions\n"
+    "3. For date conversions, use STRPTIME with multiple formats to handle various date inputs:\n"
+    "   - STRPTIME(column_name, ['%Y-%m-%d', '%d-%m-%Y', '%m/%d/%Y', '%Y/%m/%d', '%d/%m/%Y', '%m-%d-%Y', '%d.%m.%Y', '%Y.%m.%d'])\n"
+    "   - This will automatically try each format and convert to ISO 8601 (YYYY-MM-DD)\n"
     "4. For date differences, use DATE_DIFF('day', date1, date2) function\n"
     "5. For date comparisons, use the BETWEEN operator or simple comparison operators\n"
     "6. For date operations, use date_sub(), date_add() functions\n\n"
@@ -390,13 +392,17 @@ async def query_data(request: QueryRequest):
         sql_query = sql_query_match.group(1).strip()
         
         # Fix common date syntax issues in DuckDB
-        # Replace DATE() function with TRY_CAST as DATE
-        date_func_pattern = r'DATE\s*\(\s*([^)]+)\s*\)'
-        sql_query = re.sub(date_func_pattern, r'TRY_CAST(\1 AS DATE)', sql_query)
+        # Replace DATE() function with STRPTIME for multiple date formats
+        date_func_pattern = r'DATE\s*\(\s*\[?([^)\]]+)\]?\s*\)'
+        sql_query = re.sub(date_func_pattern, r"STRPTIME(\1, ['%Y-%m-%d', '%d-%m-%Y', '%m/%d/%Y', '%Y/%m/%d', '%d/%m/%Y', '%m-%d-%Y', '%d.%m.%Y', '%Y.%m.%d'])", sql_query)
         
         # Replace julianday() function with proper DuckDB date diff
-        julianday_pattern = r'julianday\s*\(\s*([^)]+)\s*\)\s*-\s*julianday\s*\(\s*([^)]+)\s*\)'
-        sql_query = re.sub(julianday_pattern, r"DATE_DIFF('day', TRY_CAST(\2 AS DATE), TRY_CAST(\1 AS DATE))", sql_query)
+        julianday_pattern = r'julianday\s*\(\s*\[?([^)\]]+)\]?\s*\)\s*-\s*julianday\s*\(\s*\[?([^)\]]+)\]?\s*\)'
+        sql_query = re.sub(julianday_pattern, r"DATE_DIFF('day', STRPTIME(\2, ['%Y-%m-%d', '%d-%m-%Y', '%m/%d/%Y', '%Y/%m/%d', '%d/%m/%Y', '%m-%d-%Y', '%d.%m.%Y', '%Y.%m.%d']), STRPTIME(\1, ['%Y-%m-%d', '%d-%m-%Y', '%m/%d/%Y', '%Y/%m/%d', '%d/%m/%Y', '%m-%d-%Y', '%d.%m.%Y', '%Y.%m.%d']))", sql_query)
+        
+        # Replace CAST to INTEGER with string comparison for invoice numbers
+        invoice_cast_pattern = r'CAST\s*\(\s*([^)]+)\s*AS\s*INTEGER\s*\)'
+        sql_query = re.sub(invoice_cast_pattern, r'\1', sql_query)
         
         # Log the extracted SQL query (for debugging)
         print(f"Extracted SQL Query: {sql_query}")
@@ -417,13 +423,24 @@ async def query_data(request: QueryRequest):
             lambda col: col.map(lambda x: x.tolist() if isinstance(x, np.ndarray) else x)
         )
         
-        # Handle non-JSON-compliant float values (NaN, inf)
+        # Handle non-JSON-compliant float values (NaN, inf) and Timestamp objects
         def sanitize_json_value(x):
             if isinstance(x, float) and (math.isnan(x) or math.isinf(x)):
                 return None
+            if isinstance(x, (pd.Timestamp, pd._libs.tslibs.timestamps.Timestamp)):
+                return x.isoformat()
             return x
             
-        result = result.applymap(sanitize_json_value)
+        # Use map instead of applymap as per deprecation warning
+        for col in result.columns:
+            result[col] = result[col].map(sanitize_json_value)
+        
+        # Convert to dict and ensure all NaN values are handled
+        result_dict = result.to_dict(orient="records")
+        for row in result_dict:
+            for key, value in row.items():
+                if isinstance(value, float) and (math.isnan(value) or math.isinf(value)):
+                    row[key] = None
         
         # Respond with the results
         if isinstance(llm_response, float):
@@ -435,7 +452,7 @@ async def query_data(request: QueryRequest):
                 llm_response = None  # or set to 0, depending on your needs
         return JSONResponse(
             content={
-                "result": result.to_dict(orient="records"),
+                "result": result_dict,
                 "generated_query": sql_query,
                 "llm_response": llm_response
             }
