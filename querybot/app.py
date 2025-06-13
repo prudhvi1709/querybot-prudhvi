@@ -141,52 +141,81 @@ class AnalyzeFileRequest(BaseModel):
 
 def get_schema_from_duckdb(file_path: str) -> tuple[str, str]:
     """Get schema using DuckDB's introspection capabilities."""
+    con = None  # Initialize con to None
     try:
-        file_extension = Path(file_path).suffix.lower()
-        con = duckdb.connect(":memory:")
+        if file_path.startswith('http://') or file_path.startswith('https://'):
+            # Handle URL
+            try:
+                con = duckdb.connect(file_path, read_only=True)
+            except Exception as e:
+                logging.error(f"Error connecting to DuckDB URL {file_path}: {e}")
+                raise ValueError(f"Could not connect to DuckDB URL: {file_path}") from e
 
-        # Handle different file types
-        if file_extension in [".csv", ".txt"]:
-            # For CSV files, try to infer schema
-            con.execute(f"CREATE TABLE temp AS SELECT * FROM read_csv_auto('{file_path}')")
-        elif file_extension == ".parquet":
-            con.execute(f"CREATE TABLE temp AS SELECT * FROM parquet_scan('{file_path}')")
-        elif file_extension == ".xlsx":
-            con.execute(f"CREATE TABLE temp AS SELECT * FROM read_excel('{file_path}')")
-        elif file_extension == ".db":
-            # For SQLite databases, list all tables and let user choose
-            con.execute(f"ATTACH '{file_path}' AS sqlite_db")
-            tables = con.execute(
-                "SELECT name FROM sqlite_db.sqlite_master WHERE type='table'"
-            ).fetchall()
+            tables = con.execute("SHOW TABLES;").fetchall()
             if not tables:
-                raise ValueError("No tables found in SQLite database")
-            # Use first table for now (could be enhanced to handle multiple tables)
-            table_name = tables[0][0]
-            con.execute(f"CREATE TABLE temp AS SELECT * FROM sqlite_db.{table_name}")
+                raise ValueError("No tables found in the online DuckDB database")
+
+            table_name = tables[0][0] # Use the first table found
+
+            # Get schema information
+            schema_info = con.execute(f"DESCRIBE {table_name};").fetchall()
+
+            # Generate schema description
+            schema_description = (
+                f"CREATE TABLE {table_name} (\n"
+                + ",\n".join([f"[{col[0]}] {col[1]}" for col in schema_info])
+                + "\n);"
+            )
+
+            # Get sample data
+            sample_data = con.execute(f"SELECT * FROM {table_name} LIMIT 5;").fetchall()
+
+            return schema_description, sample_data
         else:
-            raise ValueError(f"Unsupported file type: {file_extension}")
+            # Handle local file
+            file_extension = Path(file_path).suffix.lower()
+            con = duckdb.connect(":memory:")
 
-        # Get schema information
-        schema_info = con.execute("DESCRIBE temp").fetchall()
+            # Handle different file types
+            if file_extension in [".csv", ".txt"]:
+                con.execute(f"CREATE TABLE temp AS SELECT * FROM read_csv_auto('{file_path}')")
+            elif file_extension == ".parquet":
+                con.execute(f"CREATE TABLE temp AS SELECT * FROM parquet_scan('{file_path}')")
+            elif file_extension == ".xlsx":
+                con.execute(f"CREATE TABLE temp AS SELECT * FROM read_excel('{file_path}')")
+            elif file_extension == ".db":
+                con.execute(f"ATTACH '{file_path}' AS sqlite_db")
+                tables = con.execute(
+                    "SELECT name FROM sqlite_db.sqlite_master WHERE type='table'"
+                ).fetchall()
+                if not tables:
+                    raise ValueError("No tables found in SQLite database")
+                table_name = tables[0][0]
+                con.execute(f"CREATE TABLE temp AS SELECT * FROM sqlite_db.{table_name}")
+            else:
+                raise ValueError(f"Unsupported file type: {file_extension}")
 
-        # Generate schema description
-        schema_description = (
-            "CREATE TABLE dataset (\n"
-            + ",\n".join([f"[{col[0]}] {col[1]}" for col in schema_info])
-            + "\n);"
-        )
+            # Get schema information
+            schema_info = con.execute("DESCRIBE temp").fetchall()
 
-        # Get sample data for better question suggestions
-        sample_data = con.execute("SELECT * FROM temp LIMIT 5").fetchall()
+            # Generate schema description
+            schema_description = (
+                "CREATE TABLE dataset (\n"
+                + ",\n".join([f"[{col[0]}] {col[1]}" for col in schema_info])
+                + "\n);"
+            )
 
-        return schema_description, sample_data
+            # Get sample data for better question suggestions
+            sample_data = con.execute("SELECT * FROM temp LIMIT 5").fetchall()
+
+            return schema_description, sample_data
 
     except Exception as e:
-        logging.error(f"Error reading file {file_path}: {e}")
+        logging.error(f"Error processing file/URL {file_path}: {e}")
         raise
     finally:
-        con.close()
+        if con:
+            con.close()
 
 
 def get_schema_from_mysql(connection_string: str) -> tuple[str, str]:
@@ -291,6 +320,8 @@ async def query_data(request: QueryRequest):
 
         # Split the file paths and process each file
         file_paths = [path.strip() for path in request.file_path.split(",")]
+        online_db_alias_counter = 0
+        datasets.clear() # Clear previous datasets state
 
         # Define dtype_mapping for DuckDB
         dtype_mapping = {
@@ -301,65 +332,97 @@ async def query_data(request: QueryRequest):
             "datetime64[ns]": "DATETIME",
         }
 
-        # Process each file and create tables in DuckDB
+        # Process each file path
         for file_path in file_paths:
-            df = pd.read_csv(file_path, encoding="utf-8", encoding_errors="replace", dayfirst=True)
-            
-            # No need for the date conversion logic since we're using dayfirst=True
-            
-            # Sanitize dataset name to be SQL compatible
-            dataset_name = os.path.splitext(os.path.basename(file_path))[0]
-            # Replace spaces, dashes, and other non-alphanumeric chars with underscores
-            dataset_name = re.sub(r'[^a-zA-Z0-9_]', '_', dataset_name)
-            # Ensure name doesn't start with a number
-            if dataset_name[0].isdigit():
-                dataset_name = f"t_{dataset_name}"
+            if file_path.startswith('http://') or file_path.startswith('https://'):
+                # Handle online DuckDB URL
+                alias = f"online_db_{online_db_alias_counter}"
+                online_db_alias_counter += 1
+                try:
+                    con.execute(f"ATTACH '{file_path}' AS {alias} (READ_ONLY);")
+                    # Fetch tables from the attached database
+                    tables_in_attached_db = con.execute(
+                        f"SELECT table_name FROM information_schema.tables WHERE table_schema = '{alias}'"
+                    ).fetchall()
 
-            # Sanitize column names to be SQL compatible
-            sanitized_columns = []
-            for col in df.columns:
-                # Replace spaces, dashes, and other non-alphanumeric chars with underscores
-                sanitized_col = re.sub(r'[^a-zA-Z0-9_]', '_', col)
-                # Ensure column name doesn't start with a number
-                if sanitized_col[0].isdigit():
-                    sanitized_col = f"c_{sanitized_col}"
-                sanitized_columns.append(sanitized_col)
+                    if not tables_in_attached_db:
+                        logging.warning(f"No tables found in online database {file_path} with alias {alias}")
+                        continue
 
-            # Rename the columns in the dataframe
-            df.columns = sanitized_columns
+                    for (tbl_name,) in tables_in_attached_db:
+                        # Get schema information for each table
+                        schema_info = con.execute(f"DESCRIBE {alias}.{tbl_name};").fetchall()
+                        schema_description = (
+                            f"CREATE TABLE {alias}.{tbl_name} (\n"
+                            + ",\n".join([f"[{col[0]}] {col[1]}" for col in schema_info])
+                            + "\n);"
+                        )
+                        # Store dataset info using alias and table name
+                        datasets[f"{alias}_{tbl_name}"] = {"schema_description": schema_description}
+                except Exception as e:
+                    logging.error(f"Error attaching or reading schema from online DB {file_path}: {e}")
+                    # Optionally, return an error response or skip this file
+                    return JSONResponse(
+                        content={"error": f"Error processing online database {file_path}: {e}"}, status_code=400
+                    )
+            else:
+                # Handle local CSV file (existing logic)
+                try:
+                    df = pd.read_csv(file_path, encoding="utf-8", encoding_errors="replace", dayfirst=True)
 
-            # Drop the table if it already exists
-            try:
-                con.execute(f"DROP TABLE IF EXISTS {dataset_name};")
-            except Exception as e:
-                return JSONResponse(
-                    content={"error": f"Error dropping table: {e}"}, status_code=400
-                )
-            # Create table in DuckDB
-            con.register("data_table", df)
-            con.execute(f"CREATE TABLE {dataset_name} AS SELECT * FROM data_table")
+                    dataset_name = os.path.splitext(os.path.basename(file_path))[0]
+                    dataset_name = re.sub(r'[^a-zA-Z0-9_]', '_', dataset_name)
+                    if dataset_name[0].isdigit():
+                        dataset_name = f"t_{dataset_name}"
 
-            # Generate schema description
-            schema_description = (
-                f"CREATE TABLE {dataset_name} (\n"
-                + ",\n".join(
-                    [
-                        f"[{col}] {dtype_mapping.get(str(df[col].dtype), 'TEXT')}"
-                        for col in df.columns
-                    ]
-                )
-                + "\n);"
+                    sanitized_columns = []
+                    for col in df.columns:
+                        sanitized_col = re.sub(r'[^a-zA-Z0-9_]', '_', col)
+                        if sanitized_col[0].isdigit():
+                            sanitized_col = f"c_{sanitized_col}"
+                        sanitized_columns.append(sanitized_col)
+                    df.columns = sanitized_columns
+
+                    con.execute(f"DROP TABLE IF EXISTS {dataset_name};")
+                    con.register(f"data_table_{dataset_name}", df) # Use unique name for register
+                    con.execute(f"CREATE TABLE {dataset_name} AS SELECT * FROM data_table_{dataset_name}")
+
+                    schema_description = (
+                        f"CREATE TABLE {dataset_name} (\n"
+                        + ",\n".join(
+                            [
+                                f"[{col}] {dtype_mapping.get(str(df[col].dtype), 'TEXT')}"
+                                for col in df.columns
+                            ]
+                        )
+                        + "\n);"
+                    )
+                    datasets[dataset_name] = {"data": df, "schema_description": schema_description}
+                except Exception as e:
+                    logging.error(f"Error processing local file {file_path}: {e}")
+                    return JSONResponse(
+                        content={"error": f"Error processing local file {file_path}: {e}"}, status_code=400
+                    )
+
+        # Construct dataset_schemas string for LLM prompt
+        dataset_schemas = ""
+        if not datasets:
+             return JSONResponse(
+                content={"error": "No datasets could be loaded. Please check file paths or URLs."},
+                status_code=400
             )
 
-            # Store dataset info
-            datasets[dataset_name] = {"data": df, "schema_description": schema_description}
-
-        # Rest of your existing query_data logic
-        dataset_schemas = ""
-        for name, dataset in datasets.items():
-            schema_description = dataset.get("schema_description")
+        for name, dataset_info in datasets.items():
+            schema_description = dataset_info.get("schema_description")
             if schema_description and isinstance(schema_description, str):
-                dataset_schemas += f"Dataset name: {name}\nSchema: {schema_description}\n\n"
+                # For online DBs, name already includes alias. For local, it's the sanitized table name.
+                dataset_schemas += f"Dataset name/identifier: {name}\nSchema: {schema_description}\n\n"
+
+        if not dataset_schemas:
+            return JSONResponse(
+                content={"error": "Could not generate schema information for the provided datasets."},
+                status_code=400
+            )
 
         # User query
         user_query = request.query
